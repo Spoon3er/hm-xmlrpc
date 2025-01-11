@@ -1,122 +1,151 @@
-import time, logging, signal, sys, threading
+import time
+import logging
+import signal
+import sys
+import threading
 from contextlib import contextmanager
+from typing import Optional, Dict, Any
 from dotenv import dotenv_values
-from typing import Optional
-from server import xmlrpcServer
-from client import xmlrpcClient
 
-config = dotenv_values(".env")
-log_level = getattr(logging, config.get("LOG_LEVEL", "INFO").upper())
-print(config)
+from server import XMLRPCServer
+from client import HTTPClient
 
-logging.basicConfig(
-    level=log_level,  # Force DEBUG level temporarily for troubleshooting
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    handlers=[logging.StreamHandler(sys.stdout)],
-)
+
+class Config:
+    """Configuration handler for XMLRPC HomeMatic."""
+
+    def __init__(self, env_file: str = ".env"):
+        self.config: Dict[str, Any] = dotenv_values(env_file)
+        self.validate()
+
+    def validate(self) -> None:
+        """Validate required configuration values."""
+        required_keys = [
+            "SERVER_IP",
+            "SERVER_PORT",
+            "HM_SERVER_IP",
+            "HM_SERVER_HMIP_PORT",
+            "HM_SERVER_VIRTUALDEVICES_PORT",
+            "HM_USERNAME",
+            "HM_PASSWORD",
+            "HM_DEVICES",
+        ]
+        missing = [key for key in required_keys if key not in self.config]
+        if missing:
+            raise ValueError(f"Missing required config keys: {missing}")
 
 
 class XMLRPC_HOMEMATIC:
+    """HomeMatic XML-RPC Server and Client Manager."""
+
+    STARTUP_DELAY = 1  # seconds
+    MAX_RETRIES = 3
+    RETRY_DELAY = 2  # seconds
+
     def __init__(self):
-        self.config = config
-        self.server_hmIp: Optional[xmlrpcServer] = None
-        self.server_virtualDevices: Optional[xmlrpcServer] = None
-        self.client: Optional[xmlrpcClient] = None
+        self.config = Config().config
+        self._setup_logging()
+        self.server: Optional[XMLRPCServer] = None
+        self.client_hmip: Optional[HTTPClient] = None
+        self.client_virtual: Optional[HTTPClient] = None
+        self._shutdown_event = threading.Event()
+
+    def _setup_logging(self) -> None:
+        """Configure logging for the application."""
+        log_level = getattr(logging, self.config.get("LOG_LEVEL", "INFO").upper())
+        logging.basicConfig(
+            level=log_level,
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+            handlers=[logging.StreamHandler(sys.stdout)],
+        )
         self.server_logger = logging.getLogger("server")
-        self.server_logger.setLevel(log_level)  # Ensure DEBUG level here too
         self.client_logger = logging.getLogger("client")
+        self.server_logger.setLevel(log_level)
         self.client_logger.setLevel(log_level)
 
-    def setup(self):
+    def setup(self) -> None:
+        """Initialize server and clients."""
         self.server_logger.debug("Starting setup...")
-        # Parse DEVICE_TUPLE from comma-separated string
         device_tuple = tuple(self.config.get("HM_DEVICES", "").strip().split(","))
-        self.server_logger.debug(f"Parsed device tuple: {device_tuple}")
 
-        # Initialize servers with IDs
-        self.server_hmIp = xmlrpcServer(
-            host=self.config["SERVER_HMIP_IP"],
-            port=int(self.config["SERVER_HMIP_PORT"]),
+        self._setup_server(device_tuple)
+        self._setup_clients()
+
+    def _setup_server(self, device_tuple) -> None:
+        """Initialize XML-RPC server."""
+        self.server = XMLRPCServer(
+            host=self.config["SERVER_IP"],
+            port=int(self.config["SERVER_PORT"]),
             logger=self.server_logger,
-            DEVICE_TUPLE=device_tuple,
-            server_id="hmip",
+            device_tuple=device_tuple,
+            server_id="xmlrpc-server",
         )
 
-        self.server_virtualDevices = xmlrpcServer(
-            host=self.config["SERVER_VIRTUALDEVICES_IP"],
-            port=int(self.config["SERVER_VIRTUALDEVICES_PORT"]),
-            logger=self.server_logger,
-            DEVICE_TUPLE=device_tuple,
-            server_id="virtual",
+    def _setup_clients(self) -> None:
+        """Initialize HomeMatic clients."""
+        base_url = f"http://{self.config['HM_SERVER_IP']}"
+        self.client_hmip = self._create_client(
+            f"{base_url}:{self.config['HM_SERVER_HMIP_PORT']}", "HmIP-RF"
+        )
+        self.client_virtual = self._create_client(
+            f"{base_url}:{self.config['HM_SERVER_VIRTUALDEVICES_PORT']}/groups",
+            "VirtualDevices",
         )
 
-        # Initialize client
-        severURLs = (
-            f"{self.config['SERVER_HMIP_IP']}:{self.config['SERVER_HMIP_PORT']}",
-            f"{self.config['SERVER_VIRTUALDEVICES_IP']}:{self.config['SERVER_VIRTUALDEVICES_PORT']}",
-        )
-        hmServers = (
-            self.config["HM_SERVER_HMIP"],
-            self.config["HM_SERVER_VIRTUALDEVICES"],
-        )
-        self.client = xmlrpcClient(
-            hmServers=hmServers,
-            xmlRpcServers=severURLs,
+    def _create_client(self, server_url: str, client_id: str) -> HTTPClient:
+        """Create and configure HTTP client."""
+        return HTTPClient(
+            hmServer=server_url,
+            xmlRpcServer=f"{self.config['SERVER_IP']}:{self.config['SERVER_PORT']}",
             username=self.config["HM_USERNAME"],
             password=self.config["HM_PASSWORD"],
-            idHm="",
+            idHM=client_id,
             logger=self.client_logger,
         )
-        self.server_logger.debug("Setup completed")
 
 
 @contextmanager
 def lifespan(app: XMLRPC_HOMEMATIC):
+    """Manage application lifecycle."""
     try:
-        logging.debug("Initializing application...")
+        logging.info("=============== Initializing application... ===============")
         app.setup()
 
-        logging.debug("Starting HM-IP server...")
-        app.server_hmIp.start()
-        time.sleep(1)  # Give first server time to start
+        logging.debug("=============== Starting XML-RPC server... ===============")
+        app.server.start()
+        time.sleep(app.STARTUP_DELAY)
 
-        logging.debug("Starting Virtual Devices server...")
-        app.server_virtualDevices.start()
-        time.sleep(1)  # Give second server time to start
-
-        logging.debug("Registering client...")
-        app.client.register()
-        logging.debug("Setup complete, entering main loop...")
+        logging.info("================== Registering clients... =================")
+        app.client_hmip.register()
+        app.client_virtual.register()
+        logging.info("========== Setup complete, entering main loop... ==========")
 
         yield
     except Exception as e:
         logging.error(f"Error during startup: {e}", exc_info=True)
         raise
     finally:
-        logging.debug("Shutting down...")
-        if app.client:
-            app.client.unregister()
-        if app.server_hmIp:
-            app.server_hmIp.stop()
-        if app.server_virtualDevices:
-            app.server_virtualDevices.stop()
-
-
-def signal_handler(sig, frame):
-    print("\nCtrl+C pressed. Exiting...")
-    sys.exit(0)
+        logging.info("================= Graceful shutdown... ==================")
+        for client in [app.client_hmip, app.client_virtual]:
+            if client:
+                try:
+                    client.unregister()
+                except Exception as e:
+                    logging.error(f"Error unregistering client: {e}")
+        if app.server:
+            app.server.stop()
 
 
 def main():
-    signal.signal(signal.SIGINT, signal_handler)
     app = XMLRPC_HOMEMATIC()
+    signal.signal(signal.SIGINT, lambda s, f: sys.exit(0))
 
     with lifespan(app):
         try:
-            while True:
+            while not app._shutdown_event.is_set():
                 time.sleep(1)
         except KeyboardInterrupt:
-            pass
+            app._shutdown_event.set()
 
 
 if __name__ == "__main__":
