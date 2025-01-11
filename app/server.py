@@ -24,13 +24,13 @@ class XMLRPCServer:
         host: str,
         port: int,
         logger: logging.Logger,
-        device_tuple: Tuple[str, ...],
+        ccu_device_ids: Tuple[str, ...],
         server_id: Optional[str] = None,
     ) -> None:
         self.logger = logger
         self.host = host
         self.port = port
-        self.device_tuple = device_tuple
+        self.ccu_device_ids = ccu_device_ids
         self.server_id = server_id or f"{host}:{port}"
         self.log_file = self.DEFAULT_LOG_FILE
         self._log_lock = Lock()
@@ -47,7 +47,7 @@ class XMLRPCServer:
 
     def _args_workflow(self, args: tuple, event: str) -> bool:
         """Process incoming XML-RPC arguments."""
-        keys = ["clientID", "channel", "param", "value"]
+        keys = ["interface", "deviceID", "param", "value"]
         response = dict(zip(keys, args))
         self.logger.info(f"XML-RPC {event}: {response}")
 
@@ -57,13 +57,13 @@ class XMLRPCServer:
 
     def _process_refactored_args(self, refactored_args: Dict[str, Any]) -> bool:
         """Validate and process refactored arguments."""
-        if "channel" not in refactored_args:
+        if "deviceID" not in refactored_args:
             return False
 
-        channel = refactored_args["channel"]
-        device_id = channel.split(":")[0] if ":" in channel else channel
+        d = refactored_args["deviceID"]
+        device_id = d.split(":")[0] if ":" in d else d
 
-        return device_id in self.device_tuple
+        return device_id in self.ccu_device_ids
 
     def __enter__(self) -> "XMLRPCServer":
         """Context manager entry."""

@@ -77,7 +77,7 @@ class XMLRPC_HOMEMATIC:
             host=self.config["SERVER_IP"],
             port=int(self.config["SERVER_PORT"]),
             logger=self.server_logger,
-            device_tuple=device_tuple,
+            ccu_device_ids=device_tuple,
             server_id="xmlrpc-server",
         )
 
@@ -92,14 +92,14 @@ class XMLRPC_HOMEMATIC:
             "VirtualDevices",
         )
 
-    def _create_client(self, server_url: str, client_id: str) -> HTTPClient:
+    def _create_client(self, server_url: str, interface: str) -> HTTPClient:
         """Create and configure HTTP client."""
         return HTTPClient(
-            hmServer=server_url,
+            ccu=server_url,
             xmlRpcServer=f"{self.config['SERVER_IP']}:{self.config['SERVER_PORT']}",
             username=self.config["HM_USERNAME"],
             password=self.config["HM_PASSWORD"],
-            idHM=client_id,
+            register_id=interface,  # Interface (HmIP-RF/VirtualDevices) identifies CCU client type
             logger=self.client_logger,
         )
 
