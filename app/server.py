@@ -25,6 +25,17 @@ class XMLRPCServer:
     STATE_URL = "http://localhost:82"
     REQUEST_TIMEOUT = 10
 
+    def __str__(self) -> str:
+        """String representation of server configuration."""
+        return (
+            f"XML-RPC Server {self.server_id}\n"
+            f"Host: {self.host}:{self.port}\n"
+            f"Devices: {self.ccu_device_ids}\n"
+            f"Database: {self.db_file}\n"
+            f"CCU Parameters: {self.ccu_parameters}\n"
+            f"State devices: {self.state_device_ids}"
+        )
+
     def __init__(
         self,
         host: str,
@@ -34,7 +45,7 @@ class XMLRPCServer:
         db_file: str,
         server_id: Optional[str] = None,
         ccu_parameters: Optional[Tuple[str]] = None,
-        state_device_ids: Optional[List[str]] = None,
+        state_device_ids: Optional[Tuple[str]] = None,
     ) -> None:
         self.logger = logger
         self.host = host
@@ -52,7 +63,8 @@ class XMLRPCServer:
         logging.getLogger("xmlrpc.server").setLevel(logging.CRITICAL)
 
         # Initialize XML-RPC server
-        self.logger.debug(f"Initializing XML-RPC server {server_id} on {host}:{port}")
+        self.logger.debug(f"Initializing {self}")
+
         self.server = SimpleXMLRPCServer((self.host, self.port), logRequests=False)
         self.server.register_instance(self)
         self.server.register_multicall_functions()

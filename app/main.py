@@ -4,7 +4,7 @@ import signal
 import sys
 import threading
 from contextlib import contextmanager
-from typing import Optional, Dict, Any
+from typing import Optional, Tuple, Dict, Any
 from dotenv import dotenv_values
 
 from server import XMLRPCServer
@@ -65,6 +65,15 @@ class XMLRPC_HOMEMATIC:
         }
         self._shutdown_event = threading.Event()
 
+    def _convert_to_tuple(self, key: str) -> Optional[Tuple[str, ...]]:
+        """Convert comma-separated string to tuple, handling edge cases."""
+        value = self.config.get(key, "").strip()
+        if not value:
+            return None
+
+        items = [item.strip() for item in value.split(",") if item.strip()]
+        return tuple(items) if items else None
+
     def _setup_logging(self) -> None:
         """Configure logging for the application."""
         log_level = getattr(logging, self.config.get("LOG_LEVEL", "INFO").upper())
@@ -82,8 +91,9 @@ class XMLRPC_HOMEMATIC:
     def setup(self) -> None:
         """Initialize server and clients."""
         logging.debug("Starting setup...")
-        device_tuple = tuple(self.config.get("HM_DEVICES", "").strip().split(","))
-        clients_tuple = tuple(self.config.get("SUBSCRIBE_TO", "").strip().split(","))
+        device_tuple = self._convert_to_tuple("HM_DEVICES")
+        clients_tuple = self._convert_to_tuple("SUBSCRIBE_TO")
+        logging.debug(f"Devices: {device_tuple}, Clients: {clients_tuple}")
         ccu = [
             self.CCU_TYPES[client]
             for client in clients_tuple
@@ -101,6 +111,8 @@ class XMLRPC_HOMEMATIC:
             ccu_device_ids=device_tuple,
             db_file=self.config["DB_FILE"],
             server_id="xmlrpc-server",
+            ccu_parameters=self._convert_to_tuple("CCU_PARAMETERS"),
+            state_device_ids=self._convert_to_tuple("STATE_DEVICE_IDS"),
         )
 
     def _setup_client(self, ccu) -> HTTPClient:
