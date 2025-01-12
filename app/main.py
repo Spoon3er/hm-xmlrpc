@@ -99,8 +99,8 @@ class XMLRPC_HOMEMATIC:
             port=int(self.config["SERVER_PORT"]),
             logger=self.server_logger,
             ccu_device_ids=device_tuple,
-            server_id="xmlrpc-server",
             db_file=self.config["DB_FILE"],
+            server_id="xmlrpc-server",
         )
 
     def _setup_client(self, ccu) -> HTTPClient:

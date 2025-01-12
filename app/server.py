@@ -13,7 +13,7 @@ class XMLRPCServer:
     """HomeMatic XML-RPC Server implementation."""
 
     # Class constants
-    CCU_PARAMETER_LIST = [
+    CCU_PARAMETER_LIST = (
         "WINDOW_STATE",
         "OPERATING_VOLTAGE",
         "SET_POINT_TEMPERATURE",
@@ -21,7 +21,7 @@ class XMLRPCServer:
         "LEVEL",
         "BOOST_MODE",
         "ACTIVE_PROFILE",
-    ]
+    )
     STATE_URL = "http://localhost:82"
     REQUEST_TIMEOUT = 10
 
@@ -33,8 +33,8 @@ class XMLRPCServer:
         ccu_device_ids: Tuple[str, ...],
         db_file: str,
         server_id: Optional[str] = None,
-        ccu_parameters: Optional[List[str]] = None,  # params we want to store in the db
-        state_device_ids: Optional[List[str]] = None,  # devices we want to store in RAM
+        ccu_parameters: Optional[Tuple[str]] = None,
+        state_device_ids: Optional[List[str]] = None,
     ) -> None:
         self.logger = logger
         self.host = host
@@ -76,7 +76,13 @@ class XMLRPCServer:
         """Process states update and database insertion."""
         if self._get_device_id(response):
             if len(args) == 4:
-                self._update_device_state(response)
+                if (
+                    self.state_device_ids
+                    and response["deviceID"] in self.state_device_ids
+                ):
+                    self._update_device_state(response)
+                elif self.ccu_parameters and response["param"] in self.ccu_parameters:
+                    self._update_device_state(response)
 
                 if response["param"] == "WINDOW_STATE":
                     self._notify_states(response)
@@ -123,14 +129,13 @@ class XMLRPCServer:
         """Update device state in memory."""
         self.logger.debug(f"Received state change: {data}")
         try:
-            if self.ccu_parameters and data["param"] in self.ccu_parameters:
-                if data["deviceID"] not in self._device_states:
-                    self._device_states[data["deviceID"]] = {}
-                self._device_states[data["deviceID"]][data["param"]] = data["value"]
-                self.logger.debug(
-                    f"{data['deviceID']} {data['param']} changed to: {data['value']}"
-                )
-                self.logger.debug(f"Device states: {self._device_states}")
+            if data["deviceID"] not in self._device_states:
+                self._device_states[data["deviceID"]] = {}
+            self._device_states[data["deviceID"]][data["param"]] = data["value"]
+            self.logger.debug(
+                f"{data['deviceID']} {data['param']} changed to: {data['value']}"
+            )
+            self.logger.debug(f"Device states: {self._device_states}")
             return True
         except RequestException as e:
             self.logger.error(f"Error notifying window state: {e}")
