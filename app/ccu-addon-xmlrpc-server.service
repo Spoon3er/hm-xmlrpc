@@ -1,0 +1,37 @@
+[Unit]
+Description=XMLRPC Server for HomeMatic Integration
+After=network.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+NotifyAccess=main
+WorkingDirectory=/home/viessmann/xmlrpc-server
+
+# Main service
+ExecStart=/home/viessmann/xmlrpc-server/.venv/bin/python3 /home/viessmann/xmlrpc-server/app/main.py
+
+# Environment setup
+EnvironmentFile=-/home/viessmann/xmlrpc-server/.env
+Environment=PYTHONUNBUFFERED=1
+Environment=VIRTUAL_ENV=/home/viessmann/xmlrpc-server/.venv
+Environment=PATH=/home/viessmann/xmlrpc-server/.venv/bin:$PATH
+Environment=PYTHONPATH=/home/viessmann/xmlrpc-server
+
+# Restart settings
+Restart=always
+RestartSec=30
+
+# Watchdog settings
+WatchdogSec=30
+
+# Logging
+StandardOutput=append:/var/log/mylogs/xmlrpc-demon.log
+StandardError=append:/var/log/mylogs/xmlrpc-demon-error.log
+
+# Security
+User=viessmann
+Group=www-data
+
+[Install]
+WantedBy=multi-user.target

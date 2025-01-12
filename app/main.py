@@ -9,6 +9,7 @@ from dotenv import dotenv_values
 
 from server import XMLRPCServer
 from client import HTTPClient
+from notify import ready, stopping, watchdog, status
 
 
 class Config:
@@ -24,11 +25,11 @@ class Config:
             "SERVER_IP",
             "SERVER_PORT",
             "HM_SERVER_IP",
-            "HM_SERVER_HMIP_PORT",
-            "HM_SERVER_VIRTUALDEVICES_PORT",
             "HM_USERNAME",
             "HM_PASSWORD",
             "HM_DEVICES",
+            "DB_FILE",
+            "SUBSCRIBE_TO",
         ]
         missing = [key for key in required_keys if key not in self.config]
         if missing:
@@ -44,10 +45,24 @@ class XMLRPC_HOMEMATIC:
 
     def __init__(self):
         self.config = Config().config
-        self._setup_logging()
+        self.logger = self._setup_logging()
         self.server: Optional[XMLRPCServer] = None
-        self.client_hmip: Optional[HTTPClient] = None
-        self.client_virtual: Optional[HTTPClient] = None
+        self.client: Optional[HTTPClient] = None
+        self.client_bidcos: Optional[Dict[str, Any]] = None
+        self.CCU_TYPES = {
+            "BidCos-RF": {
+                "register_id": "BidCos-RF",
+                "url": f"http://{self.config['HM_SERVER_IP']}:2001",
+            },
+            "HmIP-RF": {
+                "register_id": "HmIP-RF",
+                "url": f"http://{self.config['HM_SERVER_IP']}:2010",
+            },
+            "VirtualDevices": {
+                "register_id": "VirtualDevices",
+                "url": f"http://{self.config['HM_SERVER_IP']}:9292/groups",
+            },
+        }
         self._shutdown_event = threading.Event()
 
     def _setup_logging(self) -> None:
@@ -58,6 +73,7 @@ class XMLRPC_HOMEMATIC:
             format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
             handlers=[logging.StreamHandler(sys.stdout)],
         )
+        self.logger = logging.getLogger("xmlrpc-homematic")
         self.server_logger = logging.getLogger("server")
         self.client_logger = logging.getLogger("client")
         self.server_logger.setLevel(log_level)
@@ -65,11 +81,16 @@ class XMLRPC_HOMEMATIC:
 
     def setup(self) -> None:
         """Initialize server and clients."""
-        self.server_logger.debug("Starting setup...")
+        logging.debug("Starting setup...")
         device_tuple = tuple(self.config.get("HM_DEVICES", "").strip().split(","))
-
+        clients_tuple = tuple(self.config.get("SUBSCRIBE_TO", "").strip().split(","))
+        ccu = [
+            self.CCU_TYPES[client]
+            for client in clients_tuple
+            if client in self.CCU_TYPES
+        ]
         self._setup_server(device_tuple)
-        self._setup_clients()
+        self._setup_client(ccu)
 
     def _setup_server(self, device_tuple) -> None:
         """Initialize XML-RPC server."""
@@ -79,73 +100,100 @@ class XMLRPC_HOMEMATIC:
             logger=self.server_logger,
             ccu_device_ids=device_tuple,
             server_id="xmlrpc-server",
+            db_file=self.config["DB_FILE"],
         )
 
-    def _setup_clients(self) -> None:
-        """Initialize HomeMatic clients."""
-        base_url = f"http://{self.config['HM_SERVER_IP']}"
-        self.client_hmip = self._create_client(
-            f"{base_url}:{self.config['HM_SERVER_HMIP_PORT']}", "HmIP-RF"
-        )
-        self.client_virtual = self._create_client(
-            f"{base_url}:{self.config['HM_SERVER_VIRTUALDEVICES_PORT']}/groups",
-            "VirtualDevices",
-        )
-
-    def _create_client(self, server_url: str, interface: str) -> HTTPClient:
+    def _setup_client(self, ccu) -> HTTPClient:
         """Create and configure HTTP client."""
-        return HTTPClient(
-            ccu=server_url,
+        self.client = HTTPClient(
+            ccu=ccu,
             xmlRpcServer=f"{self.config['SERVER_IP']}:{self.config['SERVER_PORT']}",
             username=self.config["HM_USERNAME"],
             password=self.config["HM_PASSWORD"],
-            register_id=interface,  # Interface (HmIP-RF/VirtualDevices) identifies CCU client type
             logger=self.client_logger,
         )
+
+    def start_watchdog(self):
+        """Start watchdog notification thread."""
+
+        def _watchdog_notify():
+            while not self._shutdown_event.is_set():
+                watchdog()
+                time.sleep(15)  # Half of WatchdogSec
+
+        self._watchdog_thread = threading.Thread(target=_watchdog_notify, daemon=True)
+        self._watchdog_thread.start()
+
+    def stop_watchdog(self):
+        """Stop watchdog notification thread."""
+        if self._watchdog_thread and self._watchdog_thread.is_alive():
+            self._shutdown_event.set()
+            self._watchdog_thread.join(timeout=2.0)
 
 
 @contextmanager
 def lifespan(app: XMLRPC_HOMEMATIC):
-    """Manage application lifecycle."""
+    """Manage application lifecycle with systemd notifications."""
     try:
         logging.info("=============== Initializing application... ===============")
+        status("Initializing application...")
         app.setup()
 
         logging.debug("=============== Starting XML-RPC server... ===============")
+        status("Starting XML-RPC server...")
         app.server.start()
         time.sleep(app.STARTUP_DELAY)
 
         logging.info("================== Registering clients... =================")
-        app.client_hmip.register()
-        app.client_virtual.register()
-        logging.info("========== Setup complete, entering main loop... ==========")
+        status("Registering clients...")
+        app.client.register_all()
 
+        # Start watchdog and notify systemd we're ready
+        app.start_watchdog()
+        ready()
+        status("Running")
+
+        logging.info("========== Setup complete, entering main loop... ==========")
         yield
+
     except Exception as e:
         logging.error(f"Error during startup: {e}", exc_info=True)
+        status(f"Error: {str(e)}")
         raise
+
     finally:
         logging.info("================= Graceful shutdown... ==================")
-        for client in [app.client_hmip, app.client_virtual]:
-            if client:
-                try:
-                    client.unregister()
-                except Exception as e:
-                    logging.error(f"Error unregistering client: {e}")
+        status("Shutting down...")
+        stopping()
+        app.stop_watchdog()
+
+        try:
+            app.client.unregister_all()
+        except Exception as e:
+            logging.error(f"Error unregistering client: {e}")
         if app.server:
             app.server.stop()
 
 
 def main():
-    app = XMLRPC_HOMEMATIC()
+    try:
+        app = XMLRPC_HOMEMATIC()
+    except Exception as e:
+        logging.error(f"Failed to initialize application: {e}", exc_info=True)
+        sys.exit(1)
+
     signal.signal(signal.SIGINT, lambda s, f: sys.exit(0))
 
-    with lifespan(app):
-        try:
-            while not app._shutdown_event.is_set():
-                time.sleep(1)
-        except KeyboardInterrupt:
-            app._shutdown_event.set()
+    try:
+        with lifespan(app):
+            try:
+                while not app._shutdown_event.is_set():
+                    time.sleep(1)
+            except KeyboardInterrupt:
+                app._shutdown_event.set()
+    except Exception as e:
+        logging.error(f"Application failed: {e}", exc_info=True)
+        sys.exit(1)
 
 
 if __name__ == "__main__":

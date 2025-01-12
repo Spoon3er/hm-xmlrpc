@@ -4,6 +4,7 @@ __pycache__/
 *.so
 .env
 *.log
+*.db
 .venv/
 venv/
 ENV/

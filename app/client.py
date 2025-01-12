@@ -1,8 +1,6 @@
 import requests
 import base64
-import uuid
-from typing import Optional
-from logging import Logger
+import logging
 
 
 class HTTPClient:
@@ -23,21 +21,19 @@ class HTTPClient:
 
     def __init__(
         self,
-        ccu: str,
+        ccu: list,
         xmlRpcServer: str,
         username: str,
         password: str,
-        register_id: str,
-        logger: Logger,
+        logger: logging.Logger,
     ) -> None:
-        self.ccu: str = ccu
-        self.xmlRpcServer: str = xmlRpcServer
-        self.username: str = username
-        self.password: str = password
-        self.register_id: Optional[str] = register_id
-        self.logger: Logger = logger
+        self.ccu = ccu
+        self.xmlRpcServer = xmlRpcServer
+        self.username = username
+        self.password = password
+        self.logger = logger
 
-        self.logger.debug(f"Initialized client with server: {ccu}")
+        self.logger.debug(f"Initialized client with server: {self.ccu}")
 
     def _create_request_body(self, method: str, client_id: str = "") -> str:
         """Create XML request body."""
@@ -45,52 +41,60 @@ class HTTPClient:
             method=method, server=f"http://{self.xmlRpcServer}", client_id=client_id
         )
 
-    def _basic_auth(self):
+    def _basic_auth(self) -> str:
         return base64.b64encode(f"{self.username}:{self.password}".encode()).decode()
 
-    def _make_request(self, body: str) -> requests.Response:
+    def _make_request(self, body: str, url: str) -> requests.Response:
         """Make HTTP request with error handling."""
         headers = {
             "Content-Type": self.CONTENT_TYPE,
             "Authorization": f"Basic {self._basic_auth()}",
         }
-
         response = requests.post(
-            url=self.ccu, headers=headers, data=body, timeout=self.TIMEOUT
+            url=url, headers=headers, data=body, timeout=self.TIMEOUT
         )
         response.raise_for_status()
         return response
 
-    def register(self) -> None:
+    def _register(self, client: dict) -> None:
         """Register client with HomeMatic CCU."""
-        self.logger.debug(f"Registering with HomeMatic CCU at {self.ccu}")
+        self.logger.debug(
+            f"Registering {client['register_id']} with HomeMatic CCU at {client['url']}"
+        )
         try:
-            self.register_id = (
-                self._createUUID() if not self.register_id else self.register_id
-            )
-            body = self._create_request_body("init", self.register_id)
-            response = self._make_request(body)
+            body = self._create_request_body("init", client["register_id"])
+            response = self._make_request(body, client["url"])
 
             if response.status_code == 200:
                 self.logger.info(
-                    f"Registration successful with UUID: {self.register_id}, "
-                    f"server: {self.xmlRpcServer} at {self.ccu}"
+                    f"Registration successful with clientID: {client['register_id']}, "
+                    f"server: {self.xmlRpcServer} at {client['url']}"
                 )
         except requests.RequestException as e:
             self.logger.error(f"Registration failed: {str(e)}")
             raise
 
-    def unregister(self) -> None:
+    def _unregister(self, client: dict) -> None:
         """Unregister client from HomeMatic CCU."""
-        self.logger.debug(f"Unregistering from HomeMatic CCU at {self.ccu}")
+        self.logger.debug(f"Unregistering from HomeMatic CCU at {client['url']}")
         try:
             body = self._create_request_body("init", "")
-            response = self._make_request(body)
+            response = self._make_request(body, client["url"])
 
             if response.status_code == 200:
                 self.logger.info(
-                    f"Unregistration clientID: {self.register_id}, "
-                    f"successful with Homematic CCU at {self.ccu}"
+                    f"Unregistration clientID: {client['register_id']}, "
+                    f"successful with Homematic CCU at {client['url']}"
                 )
         except requests.RequestException as e:
             self.logger.error(f"Unregistration failed: {str(e)}")
+
+    def register_all(self) -> None:
+        """Register all clients with HomeMatic CCU."""
+        for client in self.ccu:
+            self._register(client)
+
+    def unregister_all(self) -> None:
+        """Unregister all clients from HomeMatic CCU."""
+        for client in self.ccu:
+            self._unregister(client)
