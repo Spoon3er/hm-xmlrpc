@@ -33,8 +33,8 @@ class XMLRPCServer:
         ccu_device_ids: Tuple[str, ...],
         db_file: str,
         server_id: Optional[str] = None,
-        ccu_parameters: Optional[List[str]] = None,
-        state_device_ids: Optional[List[str]] = None,
+        ccu_parameters: Optional[List[str]] = None,  # params we want to store in the db
+        state_device_ids: Optional[List[str]] = None,  # devices we want to store in RAM
     ) -> None:
         self.logger = logger
         self.host = host
