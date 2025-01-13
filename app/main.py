@@ -24,6 +24,7 @@ class Config:
         required_keys = [
             "SERVER_IP",
             "SERVER_PORT",
+            "ALLOWED_CLIENTS",
             "HM_SERVER_IP",
             "HM_USERNAME",
             "HM_PASSWORD",
@@ -110,6 +111,7 @@ class XMLRPC_HOMEMATIC:
             logger=self.server_logger,
             ccu_device_ids=device_tuple,
             db_file=self.config["DB_FILE"],
+            allowed_clients=self._convert_to_tuple("ALLOWED_CLIENTS"),
             server_id="xmlrpc-server",
             ccu_parameters=self._convert_to_tuple("CCU_PARAMETERS"),
             state_device_ids=self._convert_to_tuple("STATE_DEVICE_IDS"),

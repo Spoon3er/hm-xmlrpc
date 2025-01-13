@@ -3,10 +3,24 @@ import logging
 import requests
 from requests.exceptions import RequestException
 from typing import Optional, Dict, Any, Tuple, List
-from xmlrpc.server import SimpleXMLRPCServer
+from xmlrpc.server import SimpleXMLRPCServer, SimpleXMLRPCRequestHandler
+from ipaddress import ip_address, ip_network
 from threading import Lock
 
 from db import Database
+
+
+class RequestHandler(SimpleXMLRPCRequestHandler):
+    """Custom request handler that stores client address."""
+
+    def __init__(self, request, client_address, server):
+        self.client_ip = client_address[0]
+        super().__init__(request, client_address, server)
+
+    def do_POST(self):
+        """Store client IP in server instance before handling request."""
+        self.server.current_client_ip = self.client_ip
+        super().do_POST()
 
 
 class XMLRPCServer:
@@ -43,6 +57,7 @@ class XMLRPCServer:
         logger: logging.Logger,
         ccu_device_ids: Tuple[str, ...],
         db_file: str,
+        allowed_clients: Tuple[str],
         server_id: Optional[str] = None,
         ccu_parameters: Optional[Tuple[str]] = None,
         state_device_ids: Optional[Tuple[str]] = None,
@@ -52,6 +67,7 @@ class XMLRPCServer:
         self.port = port
         self.ccu_device_ids = ccu_device_ids
         self.db_file = db_file
+        self.allowed_clients = allowed_clients
         self.server_id = server_id or f"{host}:{port}"
         self.ccu_parameters = ccu_parameters or self.CCU_PARAMETER_LIST
         self.state_device_ids = state_device_ids
@@ -65,7 +81,10 @@ class XMLRPCServer:
         # Initialize XML-RPC server
         self.logger.debug(f"Initializing {self}")
 
-        self.server = SimpleXMLRPCServer((self.host, self.port), logRequests=False)
+        self.server = SimpleXMLRPCServer(
+            (self.host, self.port), requestHandler=RequestHandler, logRequests=False
+        )
+        self.server.current_client_ip = None
         self.server.register_instance(self)
         self.server.register_multicall_functions()
         self.server_thread: Optional[threading.Thread] = None
@@ -79,11 +98,34 @@ class XMLRPCServer:
         """Context manager exit."""
         self.stop()
 
+    def _is_ip_allowed(self) -> bool:
+        """Check if client IP is allowed to access server."""
+        try:
+            client_ip = ip_address(self.server.current_client_ip)
+
+            for allowed in self.allowed_clients:
+                if "/" in allowed:  # Network range
+                    if client_ip in ip_network(allowed):
+                        return True
+                elif client_ip == ip_address(allowed):  # Single IP
+                    return True
+
+            self.logger.warning(f"Unauthorized access attempt from {client_ip}")
+            return False
+        except ValueError as e:
+            self.logger.error(f"IP validation error: {e}")
+            return False
+
     def _main(self, args: tuple, event: str) -> bool:
         """Process incoming XML-RPC arguments."""
+        if not self._is_ip_allowed():
+            return False
+
         keys = ["interface", "deviceID", "param", "value"]
         response = dict(zip(keys, args))
-        self.logger.info(f"XML-RPC {event}: {response}")
+        self.logger.info(
+            f"XML-RPC from {self.server.current_client_ip} - {event}: {response}"
+        )
 
         """Process states update and database insertion."""
         if self._get_device_id(response):
@@ -154,8 +196,8 @@ class XMLRPCServer:
             return False
 
     def _notify_states(self, data: Dict[str, Any]) -> bool:
-        """Notify window state change via GET request."""
-        self.logger.debug(f"Received 'Window_STATE' change: {data}")
+        """Notify state change via GET request."""
+        self.logger.debug(f"Received {data['param']} change: {data}")
         try:
             response = requests.get(
                 self.STATE_URL,
@@ -199,6 +241,7 @@ class XMLRPCServer:
 
     def get_all_device_states(self) -> Dict[str, Dict[str, Any]]:
         """Return all device states."""
+        self.logger.debug(f"Request from {self.server.current_client_ip}")
         return self._device_states
 
     # Server lifecycle methods

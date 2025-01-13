@@ -38,6 +38,7 @@ Create `.env` file with the following required parameters:
 ```
 SERVER_IP=x.x.x.x
 SERVER_PORT=xxxx
+ALLOWED_CLIENTS=127.0.0.1,${HM_SERVER_IP},... #clients to access the server can be solo ip or network eg.192.0.2.0/24
 HM_SERVER_IP=x.x.x.x
 HM_USERNAME=your_username
 HM_PASSWORD=your_password
