@@ -5,6 +5,7 @@ __pycache__/
 .env
 *.log
 *.db
+*.code-workspace
 .venv/
 venv/
 ENV/
